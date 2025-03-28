@@ -1,226 +1,125 @@
-# Vexa – Secure Real-Time Meeting Transcription and Knowledge Management for Corporate In-House Deployment
-
 <p align="left">
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-Vexa is an enterprise-grade AI solution designed specifically for secure corporate environments where data security and compliance are non-negotiable. It enables professionals and teams to capture, transcribe, and transform meeting insights across platforms like **Google Meet**, **Microsoft Teams**, **Zoom**, **Discord**, **Slack**, and more into actionable knowledge.
+# Vexa
+# API for **Real-Time Meeting Transcription** and **Knowledge Extraction**
 
-Built as a multiuser, scalable microservice-based application, Vexa can efficiently service thousands of simultaneous users, converting speech to text in real-time and centralizing information for seamless knowledge extraction and controlled access.
+Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
-## 📑 Table of Contents
+- **Google Meet**
+- **Zoom**
+- **Microsoft Teams**
 
-1. [🚀 Release Status](#release-status)
-2. [🌟 Features](#features)
-3. [🏗 System Architecture](#system-architecture)
-4. [📦 Repository Structure](#repository-structure)
-5. [🛠 Technology Stack](#technology-stack)
-6. [🚀 Local Setup Instructions](#local-setup-instructions)
-7. [🔗 Quick Links](#quick-links)
+Built as a **scalable multiuser service**, Vexa efficiently supports **thousands of simultaneous users** and **concurrent transcription sessions**. It's an **enterprise-grade** alternative to [recall.ai](https://recall.ai) with numerous extra features, designed specifically for **secure corporate environments** where **data security** and **compliance** are non-negotiable.
 
----
+## API Capabilities
 
-## 🚀 Release Status
+### Inputs:
+- **Meeting Bots**: Automated bots that join your meetings on:
+  - Google Meet
+  - Zoom
+  - Microsoft Teams
+  - And more platforms
 
-### Currently Available
+- **Direct Streaming**: Capture audio directly from:
+  - Web applications
+  - Mobile apps
 
-- **[Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)**:
-  - Real-time speech-to-text conversion
-  - Secure on-premise deployment
-  - Speaker detection
-  - Low-latency performance (5-10 seconds)
+### Features:
+- **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
+- **Real-time processing with LLM** to improve readability and add extra features
+- **Real-time translation** between supported languages
+- **Meeting knowledge extraction** with **RAG** (Retrieval Augmented Generation) for finished meetings
+- **MCP server** for Agent access to transcription data
 
-### Upcoming Releases (March 2025)
+## 📚 API Reference
 
-- **Knowledge Management Module**:
-  - Converts transcripts into structured insights
-  - Contextual AI-powered search
+<div align="center">
+  <a href="https://api.dev.vexa.ai/docs">
+    <img src="https://img.shields.io/badge/API-Documentation-2ea44f?style=for-the-badge" alt="API Documentation">
+  </a>
+</div>
 
-- **Google Chrome Extension**:
-  - Real-time transcription with AI assistance
+Explore our comprehensive API documentation to quickly integrate Vexa's powerful transcription capabilities into your applications. Our interactive documentation provides:
 
-👉 [Try Vexa for free](https://vexa.ai) – currently available as a SaaS for free testing at [vexa.ai](https://vexa.ai), allowing users to experience Vexa's capabilities directly in a managed environment.
+- **Detailed Endpoints**: Complete reference for all API endpoints
+- **Request Examples**: Code samples in multiple languages  
+- **Response Schemas**: Clear specifications of all data structures
+- **Authentication Guide**: Simple steps to secure your integration
 
----
+## Scalability Architecture
 
-## 🌟 Features
+Vexa is designed from the ground up as a **high-performance, scalable multiuser service**:
 
-### During Meetings:
+- **Microservice-based architecture** allowing independent scaling of components
+- **Distributed processing** of transcription workloads
+- **Horizontal scaling** to handle thousands of concurrent users
+- **Multi-tenant design** with secure data isolation between organizations
+- **Queue-based audio processing** for handling peak loads
+- **Low-latency performance** (**5-10 seconds**) even at scale
 
-- Real-time transcription with speaker identification
-- AI-driven contextual support and interactive chat
+## Current Status
 
-<p align="center">
-  <img src="assets/extension.png" alt="Vexa Extension in Action" width="600"/>
-  <br>
-  <em>Chrome Extension: Real-time transcription and AI assistance during meetings</em>
-</p>
+- **Fully Functional**: Complete low-level transcription API that:
+  - Receives **audio** and **speaker activations**
+  - Returns **high-quality transcripts** in real-time
 
-### After Meetings:
+## Coming Next (April 2025)
 
-- Intelligent knowledge extraction from conversations and documents
-- Context-aware chat powered by advanced retrieval augmented generation (RAG)
-- Enterprise-level data security with granular access controls
+### Bots Service for Automated Meeting Attendance
+- Google Meet (Early April 2025)
+- Microsoft Teams (April 2025)
+- Zoom (April 2025)
 
-<p align="center">
-  <img src="assets/dashboard.png" alt="Vexa Dashboard" width="600"/>
-  <br>
-  <em>Dashboard: Knowledge exploration and team collaboration</em>
-</p>
+### Web Component for Audio Streaming
+- Web and Mobile Apps (Early April 2025)
 
----
+### Documentation
+- Comprehensive API Documentation (Early April 2025)
 
-## 🏗 System Architecture
+## Self-Deployment
 
-Vexa employs a modular architecture ideal for enterprise environments requiring flexibility, scalability, and stringent security:
+For **security-minded companies**, Vexa offers complete **self-deployment** options.
 
-### User Interfaces
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed setup instructions.
 
-- **Google Chrome Extension**:
-  - Enhanced real-time transcription
-  - Interactive contextual assistance
+## Contributing
 
-- **Meeting and Knowledge Dashboard**:
-  - Centralized knowledge repository
-  - Advanced search and data exploration
+Contributors are welcome! Join our community and help shape Vexa's future:
 
-### Backend Services
+- **Research & Discuss**: 
+  - Review our **roadmap** in the [Project Tasks Board](https://github.com/Vexa-ai/vexa/projects)
+  - Join discussions in our [Discord Community](https://discord.gg/Ga9duGkVz9)
+  - Share your ideas and feedback
 
-1. **Streamqueue Service**:
-   - Captures and manages real-time audio streams
+- **Get Involved**:
+  - Browse available **tasks** in our task manager
+  - Request task assignment through Discord
+  - Submit **pull requests** for review
 
-2. **Audio Service**:
-   - Whisper-based, GPU-accelerated transcription
+- **Critical Tasks**:
+  - Selected **high-priority tasks** will be marked with **bounties**
+  - Bounties are sponsored by the **Vexa core team**
+  - Check task descriptions for bounty details and requirements
 
-3. **Engine Service**:
-   - Processes knowledge extraction and access logic
+To contribute:
+1. Join our Discord community
+2. Review the roadmap and available tasks
+3. Request task assignment
+4. Submit a pull request
 
----
-
-## 📦 Repository Structure
-
-### Open Source Components
-
-- **[Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)**:
-  - Whisper integration for high-performance transcription
-  - GPU acceleration with Ray Serve
-  - Redis-backed fast data retrieval
-  - Webhook integrations for flexible data flows
-
----
-
-## 🛠 Technology Stack
-
-- **Frontend**: React, Chrome Extension APIs
-- **Backend**: Python 3.12+
-- **Databases**: Redis, PostgreSQL, Qdrant, Elasticsearch
-- **Infrastructure**: Docker, Docker Compose
-- **AI Models**: Whisper, Openrouter for large language models
-
----
-
-## 🚀 Local Setup Instructions
-
-### Prerequisites
-
-- Git
-- Docker and Docker Compose
-- NVIDIA GPU with CUDA
-- Minimum 4GB RAM
-- Stable internet connection
-
-### Step 1: Clone Repository
-
-```bash
-git clone https://github.com/Vexa-ai/vexa
-cd vexa
-git submodule update --init --recursive --remote
-```
-
-### Step 2: Set Up Whisper Service
-
-```bash
-cd whisper_service
-cp .env.example .env
-chmod +x start.sh
-docker compose up -d
-```
-
-Check logs:
-
-```bash
-docker compose logs -f
-```
-
-### Step 3: Set Up Transcription Service
-
-```bash
-cd ../vexa-transcription-service
-cp .env.example .env
-# Set WHISPER_SERVICE_URL and WHISPER_API_TOKEN
-docker compose up -d
-```
-
-### Step 4: Set Up Engine Service
-
-```bash
-cd ../vexa-engine
-cp .env.example .env
-docker compose up -d
-# Optional clear existing transcripts
-docker compose exec vexa-engine python clear_transcripts.py
-```
-
-### Step 5: Start Test Meeting API Calls Replay
-
-```bash
-cd ../vexa-testing-app
-python register_test_user.py
-python main.py
-```
-
-This will start sending API calls that simulate a meeting. Keep this terminal running for the duration of your test.
-
-### Step 6: View Results (In a Separate Terminal)
-
-While keeping the previous terminal with API calls running, open a new terminal and run:
-
-```bash
-cd ../vexa-engine
-docker compose exec vexa-engine python demo.py
-```
-
-### Step 7: Access Documentation and Dashboards
-
-After all services are running, you can access:
-
-- Transcription Service Swagger: [http://localhost:8008/docs](http://localhost:8008/docs)
-- Engine Service Swagger: [http://localhost:8010/docs](http://localhost:8010/docs)
-- Ray Model Deployment Dashboard: [http://localhost:8265/#/overview](http://localhost:8265/#/overview)
-
-### Troubleshooting
-
-- Logs: `docker compose logs -f`
-- Verify `.env` configurations
-- Ensure GPU passthrough is correctly configured
-
----
-
-## 🔗 Quick Links
+## Project Links
 
 - 🌐 [Vexa Website](https://vexa.ai)
 - 💼 [LinkedIn](https://www.linkedin.com/company/vexa-ai/)
 - 🐦 [X (@grankin_d)](https://x.com/grankin_d)
 - 💬 [Discord Community](https://discord.gg/Ga9duGkVz9)
 
-⭐ Star this repository to stay updated on new releases!
-
----
-
-## 📄 License
+## License
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Vexa is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.
+Vexa is licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for the full license text.
 
-The Vexa name and logo are trademarks of Vexa.ai Inc. See [TRADEMARK.md](TRADEMARK.md) for more information.
+The Vexa name and logo are trademarks of **Vexa.ai Inc**. See [TRADEMARK.md](TRADEMARK.md) for more information.

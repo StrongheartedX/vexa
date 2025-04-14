@@ -85,9 +85,10 @@ services:
     environment:
       - TRANSCRIPTION_COLLECTOR_URL=ws://transcription-collector:8000/collector
     command:  ["--port", "9090", "--backend", "faster_whisper", "-fw", "/root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f"]
-    ports:
-      - "9090:9090"
+    # ports:
+    #   - "9090:9090"
     deploy:
+      replicas: 3
       resources:
         reservations:
           devices:
@@ -99,7 +100,38 @@ services:
         condition: service_started
     networks:
       - vexa_default
+      - whispernet
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  load-balancer:
+    image: nginx:latest
+    ports:
+      - "9090:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - whisperlive
+    networks:
+      - whispernet
+
+  load-tester:
+    build:
+      context: .
+      dockerfile: load-tester/Dockerfile
+    volumes:
+      - ./load_test_client.py:/app/load_test_client.py
+      - ./test_audio:/app/test_audio
+    working_dir: /app
+    command: sleep infinity
+    depends_on:
+      - load-balancer
+    networks:
+      - whispernet
 
   transcription-collector:
     build:
@@ -149,7 +181,6 @@ services:
     networks:
       - vexa_default
     restart: unless-stopped
-
     ports:
       - "5438:5432"
 
@@ -159,4 +190,6 @@ volumes:
 
 networks:
   vexa_default:
+    driver: bridge
+  whispernet:
     driver: bridge

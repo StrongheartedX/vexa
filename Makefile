@@ -36,51 +36,124 @@ check_docker:
 
 # === DATABASE MIGRATION TARGETS ===
 
-# Check if database needs migrations and run them if needed
-migrate-check:
-	@echo "---> Checking database migration status..."
+# Single command to migrate database from any prior version to latest
+migrate-upgrade:
+	@echo "---> Upgrading database to latest version (works from any prior version)..."
 	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		echo "---> Transcription collector is running, checking migrations..."; \
-		if docker compose exec -T transcription-collector bash -c "cd /app && alembic current" 2>/dev/null | grep -q "(head)"; then \
-			echo "✅ Database is up to date - no migrations needed."; \
+		echo "---> Ensuring migration files are in container..."; \
+		$(MAKE) migrate-sync; \
+		echo "---> Checking current database state..."; \
+		CURRENT_REV=$$(docker compose exec -T transcription-collector bash -c "cd /app && alembic current 2>/dev/null" | grep -v "INFO" | head -1 || echo "none"); \
+		if [ "$$CURRENT_REV" = "none" ] || [ -z "$$CURRENT_REV" ]; then \
+			echo "---> Database appears uninitialized. Initializing alembic and upgrading..."; \
+			if docker compose exec -T transcription-collector bash -c "cd /app && alembic stamp base && alembic upgrade head"; then \
+				echo "✅ Database successfully initialized and upgraded to latest version!"; \
+			else \
+				echo "❌ Failed to initialize database. Trying direct upgrade..."; \
+				docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head" || \
+				(echo "❌ Direct upgrade failed. Please check database state manually."; exit 1); \
+			fi; \
 		else \
-			echo "🔄 Database needs migrations. Running them now..."; \
-			$(MAKE) migrate-run; \
+			echo "---> Database at revision: $$CURRENT_REV"; \
+			echo "---> Upgrading to latest version..."; \
+			if docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; then \
+				NEW_REV=$$(docker compose exec -T transcription-collector bash -c "cd /app && alembic current 2>/dev/null" | grep -v "INFO" | head -1); \
+				if [ "$$CURRENT_REV" = "$$NEW_REV" ]; then \
+					echo "✅ Database was already at latest version ($$NEW_REV)"; \
+				else \
+					echo "✅ Database successfully upgraded from $$CURRENT_REV to $$NEW_REV!"; \
+				fi; \
+			else \
+				echo "❌ Migration failed. Please check the logs and database state."; \
+				exit 1; \
+			fi; \
 		fi; \
-	else \
-		echo "⚠️  Transcription collector not running. Start services first with 'make up'."; \
-	fi
-
-# Run pending database migrations
-migrate-run:
-	@echo "---> Applying database migrations..."
-	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		echo "---> Copying alembic files to container..."; \
-		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
-		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
-		echo "---> Running alembic upgrade..."; \
-		if docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; then \
-			echo "✅ Database migrations completed successfully!"; \
-			$(MAKE) migrate-copy; \
-		else \
-			echo "❌ Migration failed. Please check the logs and database state."; \
-			exit 1; \
-		fi; \
+		$(MAKE) migrate-sync; \
+		echo "---> Migration upgrade completed successfully!"; \
 	else \
 		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
 		exit 1; \
 	fi
 
+# Check if database needs migrations and run them if needed (used by 'make all')
+migrate-check:
+	@echo "---> Checking database migration status..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Transcription collector is running, checking migrations..."; \
+		$(MAKE) migrate-sync; \
+		CURRENT_REV=$$(docker compose exec -T transcription-collector bash -c "cd /app && alembic current 2>/dev/null" | grep -v "INFO" | head -1 || echo "none"); \
+		if [ "$$CURRENT_REV" = "none" ] || [ -z "$$CURRENT_REV" ]; then \
+			echo "🔄 Database needs initialization. Running migrations..."; \
+			$(MAKE) migrate-upgrade; \
+		elif echo "$$CURRENT_REV" | grep -q "(head)"; then \
+			echo "✅ Database is up to date (revision: $$CURRENT_REV) - no migrations needed."; \
+		else \
+			echo "🔄 Database needs upgrade. Running migrations..."; \
+			$(MAKE) migrate-upgrade; \
+		fi; \
+	else \
+		echo "⚠️  Transcription collector not running. Start services first with 'make up'."; \
+	fi
+
+# Synchronize migration files between host and container (bidirectional)
+migrate-sync:
+	@echo "---> Synchronizing migration files with container..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		CONTAINER_ID=$$(docker compose ps -q transcription-collector); \
+		if [ -n "$$CONTAINER_ID" ]; then \
+			echo "---> Copying alembic files to container..."; \
+			docker cp libs/shared-models/alembic.ini $$CONTAINER_ID:/app/ 2>/dev/null || true; \
+			docker cp libs/shared-models/alembic $$CONTAINER_ID:/app/ 2>/dev/null || true; \
+			echo "---> Copying any new migration files back to host..."; \
+			docker cp $$CONTAINER_ID:/app/alembic/versions/. libs/shared-models/alembic/versions/ 2>/dev/null || true; \
+			echo "✅ Migration files synchronized."; \
+		else \
+			echo "❌ Could not find transcription collector container."; \
+			exit 1; \
+		fi; \
+	else \
+		echo "❌ Transcription collector not running."; \
+		exit 1; \
+	fi
+
+# Run pending database migrations (legacy - use migrate-upgrade instead)
+migrate-run:
+	@echo "---> Running database migrations (use 'make migrate-upgrade' for better handling)..."
+	@$(MAKE) migrate-upgrade
+
 # Force run migrations (useful for development)
 migrate-force:
 	@echo "---> Force running database migrations..."
 	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		echo "---> Copying alembic files to container..."; \
-		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/; \
-		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/; \
+		echo "---> Forcing migration files sync..."; \
+		$(MAKE) migrate-sync; \
 		echo "---> Running alembic upgrade..."; \
 		docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; \
-		$(MAKE) migrate-copy; \
+		$(MAKE) migrate-sync; \
+		echo "✅ Force migration completed!"; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Reset database to base state (DANGEROUS - for development only)
+migrate-reset:
+	@echo "---> ⚠️  WARNING: This will RESET the database to base state and re-run all migrations!"
+	@echo "---> This action is IRREVERSIBLE and will LOSE ALL DATA!"
+	@read -p "Are you sure you want to continue? Type 'RESET' to confirm: " confirm; \
+	if [ "$$confirm" != "RESET" ]; then \
+		echo "Operation cancelled."; \
+		exit 0; \
+	fi
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Ensuring migration files are in container..."; \
+		$(MAKE) migrate-sync; \
+		echo "---> Resetting database to base state..."; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic downgrade base"; \
+		echo "---> Upgrading to head..."; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; \
+		$(MAKE) migrate-sync; \
+		echo "✅ Database reset and upgraded to latest version!"; \
 	else \
 		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
 		exit 1; \
@@ -90,12 +163,21 @@ migrate-force:
 migrate-status:
 	@echo "---> Checking current migration status..."
 	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
-		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		$(MAKE) migrate-sync; \
 		echo "---> Current migration:"; \
-		docker compose exec -T transcription-collector bash -c "cd /app && alembic current"; \
+		CURRENT_REV=$$(docker compose exec -T transcription-collector bash -c "cd /app && alembic current 2>/dev/null" | grep -v "INFO" | head -1 || echo "none"); \
+		echo "$$CURRENT_REV"; \
 		echo "---> Available migrations:"; \
-		docker compose exec -T transcription-collector bash -c "cd /app && alembic show head"; \
+		HEAD_REV=$$(docker compose exec -T transcription-collector bash -c "cd /app && alembic show head 2>/dev/null" | grep -v "INFO" | head -1 || echo "unknown"); \
+		echo "$$HEAD_REV"; \
+		echo "---> Pending migrations:"; \
+		if [ "$$CURRENT_REV" = "none" ] || [ -z "$$CURRENT_REV" ]; then \
+			echo "⚠️  Database is uninitialized - needs migration"; \
+		elif echo "$$CURRENT_REV" | grep -q "(head)"; then \
+			echo "✅ Database is up to date - no pending migrations."; \
+		else \
+			echo "⚠️  Database needs upgrade from $$CURRENT_REV to $$HEAD_REV"; \
+		fi; \
 	else \
 		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
 		exit 1; \
@@ -105,8 +187,7 @@ migrate-status:
 migrate-history:
 	@echo "---> Showing migration history..."
 	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
-		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		$(MAKE) migrate-sync; \
 		docker compose exec -T transcription-collector bash -c "cd /app && alembic history"; \
 	else \
 		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
@@ -121,33 +202,21 @@ migrate-generate:
 		exit 1; \
 	fi
 	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		echo "---> Copying alembic files to container..."; \
-		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/; \
-		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/; \
+		echo "---> Ensuring migration files are in container..."; \
+		$(MAKE) migrate-sync; \
 		echo "---> Generating migration: $(MSG)"; \
 		docker compose exec -T transcription-collector bash -c "cd /app && alembic revision --autogenerate -m '$(MSG)'"; \
-		$(MAKE) migrate-copy; \
+		$(MAKE) migrate-sync; \
 		echo "✅ Migration generated! Remember to review the generated file."; \
 	else \
 		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
 		exit 1; \
 	fi
 
-# Copy migration files from container back to host
+# Copy migration files from container back to host (legacy - use migrate-sync instead)
 migrate-copy:
-	@echo "---> Copying migration files from container to host..."
-	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
-		CONTAINER_ID=$$(docker compose ps -q transcription-collector); \
-		if [ -n "$$CONTAINER_ID" ]; then \
-			echo "---> Copying alembic files from container..."; \
-			docker cp $$CONTAINER_ID:/app/alembic/versions/. libs/shared-models/alembic/versions/ 2>/dev/null || echo "No new migration files to copy."; \
-			echo "✅ Migration files synchronized."; \
-		else \
-			echo "❌ Could not find transcription collector container."; \
-		fi; \
-	else \
-		echo "⚠️  Transcription collector not running. No files to copy."; \
-	fi
+	@echo "---> Copying migration files from container to host (use 'make migrate-sync' for bidirectional sync)..."
+	@$(MAKE) migrate-sync
 
 # === END MIGRATION TARGETS ===
 

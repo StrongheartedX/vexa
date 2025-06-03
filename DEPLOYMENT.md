@@ -65,43 +65,88 @@ Admin API docs: http://localhost:8057/docs
 **Managing Services:**
 - `make ps`: Show container status.
 - `make logs`: Tail logs (or `make logs SERVICE=<service_name>`).
-- `make down`: Stop all services.
+- `make down`: Stop services.
 - `make clean`: Stop services and remove volumes.
 
 
 
-#### Automatic Migration Management
+## Database Migration Management
+
+### Single Command Migration (Recommended)
+The easiest way to migrate your database from **any prior version** to the latest:
+
 ```bash
-# Start services and check for needed migrations
+# Migrate database from any prior version to latest (works with any setup)
+make migrate-upgrade
+```
+
+This command automatically:
+- ✅ Detects current database state (including completely fresh databases)
+- ✅ Handles uninitialized databases 
+- ✅ Upgrades from any prior version to latest
+- ✅ Synchronizes migration files between host and container
+- ✅ Provides clear success/failure feedback
+
+### Automatic Migration Management (Used by `make all`)
+```bash
+# Start services and automatically check/run migrations if needed
 make all TARGET=gpu
 
-# Check if database needs migrations
+# Just check if database needs migrations (automatically runs them if needed)
 make migrate-check
 ```
 
-#### Manual Migration Commands
+The `make all` command automatically calls `migrate-check`, which will upgrade the database if needed.
+
+### Additional Migration Commands
+
 ```bash
-# Show current migration status
+# Show current migration status and pending migrations
 make migrate-status
 
-# Show migration history
+# Show complete migration history
 make migrate-history
 
-# Force run pending migrations
-make migrate-run
+# Force run migrations (bypasses checks)
+make migrate-force
 
-# Generate a new migration (for development)
-make migrate-generate MSG="Description of changes"
-
-# Copy migration files from container to host
-make migrate-copy
+# Synchronize migration files between host and container
+make migrate-sync
 ```
 
-#### Migration Workflow for Development
-1. **Modify models** in `libs/shared-models/shared_models/models.py`
-2. **Rebuild containers** with `make all TARGET=gpu`
-3. **Generate migration**: `make migrate-generate MSG="Your description"`
-4. **Review** the generated migration file
-5. **Apply migration**: `make migrate-run`
-6. **Commit** the migration files to version control
+### Development Migration Workflow
+For developers making changes to database models:
+
+```bash
+# 1. Modify models in libs/shared-models/shared_models/models.py
+
+# 2. Rebuild containers to get latest model changes
+make all TARGET=gpu
+
+# 3. Generate a new migration
+make migrate-generate MSG="Add new speaker tracking feature"
+
+# 4. Review the generated migration file in libs/shared-models/alembic/versions/
+
+# 5. Apply the migration (or use migrate-upgrade for safety)
+make migrate-upgrade
+
+# 6. Commit the migration files to version control
+git add libs/shared-models/alembic/versions/
+git commit -m "Add migration for speaker tracking feature"
+```
+
+### Emergency Migration Commands (Development Only)
+
+```bash
+# DANGEROUS: Reset database to base state and re-apply all migrations
+# This will DELETE ALL DATA - only use for development
+make migrate-reset
+```
+
+The migration system is designed to be robust and handle:
+- Fresh database installations
+- Databases at any prior version
+- Corrupted migration states (with migrate-force)
+- Development workflow with auto-generation
 

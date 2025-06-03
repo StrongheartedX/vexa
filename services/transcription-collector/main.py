@@ -16,7 +16,7 @@ from typing import Optional, List, Dict, Any, Set, Tuple
 from pydantic import ValidationError
 
 from shared_models.database import get_db, init_db, async_session_local
-from shared_models.models import APIToken, User, Meeting, Transcription, MeetingSession
+from shared_models.models import APIToken, User, Meeting, Transcription, MeetingSession, SpeakerEvent
 from shared_models.schemas import (
     TranscriptionSegment, 
     HealthResponse, 
@@ -187,6 +187,8 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
         # Process different message types
         if message_type == "session_start":
             return await process_session_start_event(message_id, stream_data)
+        elif message_type == "speaker_activity":
+            return await process_speaker_activity_event(message_id, stream_data)
         elif message_type == "transcription":
             # Continue with normal transcription processing below
             pass
@@ -431,6 +433,78 @@ async def process_session_start_event(message_id: str, stream_data: Dict[str, An
     except Exception as e:
         # Catch-all for unexpected errors
         logger.error(f"Unexpected error in process_session_start_event for {message_id}: {e}", exc_info=True)
+        return False  # Unexpected error, DO NOT ACK
+
+# --- Helper function for processing speaker_activity events ---
+async def process_speaker_activity_event(message_id: str, stream_data: Dict[str, Any]) -> bool:
+    """Processes a speaker_activity event from the Redis stream.
+    
+    Stores speaker events in the SpeakerEvent table for Phase 2 timeline correlation.
+    
+    Returns True if processing is considered complete (can be ACKed), 
+    False if a potentially recoverable error occurred (should not be ACKed).
+    """
+    try:
+        # 1. Validate required fields for speaker_activity
+        required_fields = ["platform", "meeting_id", "token", "event_type", 
+                          "participant_name", "participant_id_meet", "client_timestamp_ms", "session_uid"]
+        if not all(field in stream_data for field in required_fields):
+            logger.warning(f"Speaker activity message {message_id} missing required fields. Skipping. Required: {required_fields}")
+            return True  # Handled error, OK to ACK
+            
+        # 2. Validate Token, Get User, Find Meeting ID
+        user: Optional[User] = None
+        meeting: Optional[Meeting] = None
+        
+        async with async_session_local() as db:
+            try:
+                # Use helper to get user, raises ValueError on failure
+                user = await get_user_by_token(stream_data['token'], db)
+                
+                # Find meeting
+                stmt_meeting = select(Meeting).where(
+                    Meeting.user_id == user.id,
+                    Meeting.platform == stream_data['platform'],
+                    Meeting.platform_specific_id == stream_data['meeting_id']
+                ).order_by(Meeting.created_at.desc())
+                result_meeting = await db.execute(stmt_meeting)
+                meeting = result_meeting.scalars().first()
+
+                if not meeting:
+                    logger.warning(f"Meeting lookup failed for speaker_activity message {message_id}: "
+                                  f"No meeting found for user {user.id}, platform '{stream_data['platform']}', "
+                                  f"native ID '{stream_data['meeting_id']}'")
+                    return True  # Persistent data issue, OK to ACK
+                
+                # 3. Create speaker event record
+                speaker_event = SpeakerEvent(
+                    meeting_id=meeting.id,
+                    session_uid=stream_data['session_uid'],
+                    participant_name=stream_data['participant_name'],
+                    participant_id_meet=stream_data['participant_id_meet'],
+                    event_type=stream_data['event_type'],
+                    client_timestamp_ms=int(stream_data['client_timestamp_ms'])
+                )
+                
+                db.add(speaker_event)
+                await db.commit()
+                
+                logger.info(f"Successfully stored speaker event: {stream_data['event_type']} "
+                          f"for {stream_data['participant_name']} in meeting {meeting.id}")
+                return True
+                
+            except ValueError as ve:
+                # Specific errors from token/meeting lookup
+                logger.warning(f"Auth/Lookup failed for speaker_activity message {message_id}: {ve}. Skipping.")
+                return True  # Persistent data issue, OK to ACK
+            except Exception as db_err:
+                # Generic DB or other errors during lookup phase
+                logger.error(f"DB/Lookup error processing speaker_activity message {message_id}: {db_err}", exc_info=True)
+                return False  # Potentially recoverable DB error, DO NOT ACK
+    
+    except Exception as e:
+        # Catch-all for unexpected errors
+        logger.error(f"Unexpected error in process_speaker_activity_event for {message_id}: {e}", exc_info=True)
         return False  # Unexpected error, DO NOT ACK
 
 # --- Function to claim and process stale messages ---

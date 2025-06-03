@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from pydantic import BaseModel, Field, EmailStr, validator
 from datetime import datetime
 from enum import Enum, auto
@@ -210,7 +210,7 @@ class TranscriptionSegment(BaseModel):
     text: str
     language: Optional[str]
     created_at: Optional[datetime]
-    speaker: Optional[str] = None
+    speaker: Optional[str] = None  # Speaker name - simple and effective
     absolute_start_time: Optional[datetime] = Field(None, description="Absolute start timestamp of the segment (UTC)")
     absolute_end_time: Optional[datetime] = Field(None, description="Absolute end timestamp of the segment (UTC)")
 
@@ -285,4 +285,61 @@ class BotStatus(BaseModel):
 
 class BotStatusResponse(BaseModel):
     running_bots: List[BotStatus]
-# --- END Bot Status Schemas --- 
+
+# --- Phase 2: Speaker Event Schemas ---
+
+class SpeakerEventType(str, Enum):
+    """Speaker activity event types for Phase 2"""
+    SPEAKER_START = "SPEAKER_START"
+    SPEAKER_END = "SPEAKER_END"
+
+class SpeakerEventBase(BaseModel):
+    """Base schema for speaker events"""
+    participant_name: str = Field(..., description="Display name of the participant")
+    participant_id_meet: str = Field(..., description="Platform-specific participant identifier")
+    event_type: SpeakerEventType = Field(..., description="Type of speaker event")
+    client_timestamp_ms: int = Field(..., description="Original timestamp from bot in milliseconds since epoch")
+
+class SpeakerEventCreate(SpeakerEventBase):
+    """Schema for creating speaker events"""
+    session_uid: str = Field(..., description="Session UID that generated this event")
+
+class SpeakerEventResponse(SpeakerEventBase):
+    """Schema for speaker event responses"""
+    id: int
+    meeting_id: int
+    session_uid: str
+    server_timestamp: datetime = Field(..., description="When the event was processed by the server")
+    absolute_timestamp: Optional[datetime] = Field(None, description="Correlated absolute timestamp (UTC)")
+    
+    class Config:
+        orm_mode = True
+        use_enum_values = True
+
+# --- Phase 2: Speaker Timeline Integration Schemas ---
+
+class SpeakerTimelineResponse(BaseModel):
+    """
+    Enhanced response that includes both transcription segments and speaker events
+    for detailed timeline reconstruction in Phase 2.
+    """
+    # Meeting details
+    id: int = Field(..., description="Internal database ID for the meeting")
+    platform: Platform
+    native_meeting_id: Optional[str]
+    constructed_meeting_url: Optional[str]
+    status: str
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    
+    # Timeline data
+    segments: List[TranscriptionSegment] = Field(..., description="Transcription segments with speaker correlation")
+    speaker_events: List[SpeakerEventResponse] = Field(..., description="Detailed speaker activity timeline")
+    
+    # Timeline metadata
+    total_speakers: int = Field(..., description="Total number of unique speakers detected")
+    speaker_summary: Dict[str, Dict[str, Any]] = Field(..., description="Summary of speaking time per participant")
+    
+    class Config:
+        orm_mode = True
+        use_enum_values = True

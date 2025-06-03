@@ -68,3 +68,40 @@ Admin API docs: http://localhost:8057/docs
 - `make down`: Stop all services.
 - `make clean`: Stop services and remove volumes.
 
+
+
+#### Automatic Migration Management
+```bash
+# Start services and check for needed migrations
+make all TARGET=gpu
+
+# Check if database needs migrations
+make migrate-check
+```
+
+#### Manual Migration Commands
+```bash
+# Show current migration status
+make migrate-status
+
+# Show migration history
+make migrate-history
+
+# Force run pending migrations
+make migrate-run
+
+# Generate a new migration (for development)
+make migrate-generate MSG="Description of changes"
+
+# Copy migration files from container to host
+make migrate-copy
+```
+
+#### Migration Workflow for Development
+1. **Modify models** in `libs/shared-models/shared_models/models.py`
+2. **Rebuild containers** with `make all TARGET=gpu`
+3. **Generate migration**: `make migrate-generate MSG="Your description"`
+4. **Review** the generated migration file
+5. **Apply migration**: `make migrate-run`
+6. **Commit** the migration files to version control
+

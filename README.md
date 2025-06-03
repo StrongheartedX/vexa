@@ -167,6 +167,32 @@ To run Vexa locally on your own infrastructure, the primary command you'll use a
 
 Detailed instructions: [Local Deployment and Testing Guide](DEPLOYMENT.md).
 
+### Database Migrations
+
+Vexa uses **Alembic** for database schema management with **automated migration handling**:
+
+```bash
+# Migrations are automatically checked during startup
+make all TARGET=gpu
+
+# Manual migration commands
+make migrate-check      # Check if migrations needed
+make migrate-status     # Show current state
+make migrate-history    # Show migration history
+make migrate-run        # Apply pending migrations
+
+# Development: Generate new migration
+make migrate-generate MSG="Description of changes"
+```
+
+The migration system provides:
+- ✅ **Automatic schema updates** during deployment
+- ✅ **Version-controlled database changes**
+- ✅ **Safe rollback capabilities**
+- ✅ **Container-integrated workflow**
+
+See [MIGRATIONS.md](MIGRATIONS.md) for detailed migration documentation.
+
 ## Contributing
 
 Contributors are welcome! Join our community and help shape Vexa's future. Here's how to get involved:

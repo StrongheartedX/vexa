@@ -1,7 +1,7 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test migrate-check migrate-run migrate-status migrate-history migrate-copy migrate-force migrate-generate
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up
+all: setup-env build-bot-image build up migrate-check
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
@@ -33,6 +33,123 @@ check_docker:
 		exit 1; \
 	fi
 	@echo "---> Docker is running."
+
+# === DATABASE MIGRATION TARGETS ===
+
+# Check if database needs migrations and run them if needed
+migrate-check:
+	@echo "---> Checking database migration status..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Transcription collector is running, checking migrations..."; \
+		if docker compose exec -T transcription-collector bash -c "cd /app && alembic current" 2>/dev/null | grep -q "(head)"; then \
+			echo "✅ Database is up to date - no migrations needed."; \
+		else \
+			echo "🔄 Database needs migrations. Running them now..."; \
+			$(MAKE) migrate-run; \
+		fi; \
+	else \
+		echo "⚠️  Transcription collector not running. Start services first with 'make up'."; \
+	fi
+
+# Run pending database migrations
+migrate-run:
+	@echo "---> Applying database migrations..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Copying alembic files to container..."; \
+		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		echo "---> Running alembic upgrade..."; \
+		if docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; then \
+			echo "✅ Database migrations completed successfully!"; \
+			$(MAKE) migrate-copy; \
+		else \
+			echo "❌ Migration failed. Please check the logs and database state."; \
+			exit 1; \
+		fi; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Force run migrations (useful for development)
+migrate-force:
+	@echo "---> Force running database migrations..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Copying alembic files to container..."; \
+		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/; \
+		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/; \
+		echo "---> Running alembic upgrade..."; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic upgrade head"; \
+		$(MAKE) migrate-copy; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Show current migration status
+migrate-status:
+	@echo "---> Checking current migration status..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		echo "---> Current migration:"; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic current"; \
+		echo "---> Available migrations:"; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic show head"; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Show migration history
+migrate-history:
+	@echo "---> Showing migration history..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/ 2>/dev/null || true; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic history"; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Generate a new migration
+migrate-generate:
+	@echo "---> Generating new migration..."
+	@if [ -z "$(MSG)" ]; then \
+		echo "❌ Please provide a migration message. Usage: make migrate-generate MSG='Your migration description'"; \
+		exit 1; \
+	fi
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		echo "---> Copying alembic files to container..."; \
+		docker cp libs/shared-models/alembic.ini $$(docker compose ps -q transcription-collector):/app/; \
+		docker cp libs/shared-models/alembic $$(docker compose ps -q transcription-collector):/app/; \
+		echo "---> Generating migration: $(MSG)"; \
+		docker compose exec -T transcription-collector bash -c "cd /app && alembic revision --autogenerate -m '$(MSG)'"; \
+		$(MAKE) migrate-copy; \
+		echo "✅ Migration generated! Remember to review the generated file."; \
+	else \
+		echo "❌ Transcription collector not running. Start services first with 'make up'."; \
+		exit 1; \
+	fi
+
+# Copy migration files from container back to host
+migrate-copy:
+	@echo "---> Copying migration files from container to host..."
+	@if docker compose ps | grep -q "transcription-collector.*Up"; then \
+		CONTAINER_ID=$$(docker compose ps -q transcription-collector); \
+		if [ -n "$$CONTAINER_ID" ]; then \
+			echo "---> Copying alembic files from container..."; \
+			docker cp $$CONTAINER_ID:/app/alembic/versions/. libs/shared-models/alembic/versions/ 2>/dev/null || echo "No new migration files to copy."; \
+			echo "✅ Migration files synchronized."; \
+		else \
+			echo "❌ Could not find transcription collector container."; \
+		fi; \
+	else \
+		echo "⚠️  Transcription collector not running. No files to copy."; \
+	fi
+
+# === END MIGRATION TARGETS ===
 
 # Include .env file if it exists for environment variables 
 -include .env
@@ -193,6 +310,9 @@ up: check_docker
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
 		docker compose --profile cpu up -d; \
 	fi
+	@echo "---> Waiting for services to start..."
+	@sleep 5
+	@echo "---> Services started. Run 'make migrate-check' to verify database migrations."
 
 # Stop services
 down: check_docker

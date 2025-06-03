@@ -9,6 +9,7 @@ from typing import List, Optional
 import datetime
 import websocket
 import sys # Added sys import
+from datetime import timezone
 
 import torch
 import numpy as np
@@ -290,6 +291,74 @@ class TranscriptionCollectorClient:
                 
         except Exception as e:
             logging.error(f"Error publishing transcription: {e}")
+            return False
+
+    def publish_speaker_event(self, token, platform, meeting_id, event_type, 
+                            participant_name, participant_id_meet, client_timestamp_ms, 
+                            session_uid, meeting_url=None):
+        """Publish speaker activity event to Redis stream.
+        
+        Args:
+            token: User's API token
+            platform: Platform identifier (e.g., 'google_meet')
+            meeting_id: Platform-specific meeting ID
+            event_type: Type of speaker event (SPEAKER_START/SPEAKER_END)
+            participant_name: Display name of the participant
+            participant_id_meet: Platform-specific participant ID
+            client_timestamp_ms: Client timestamp in milliseconds
+            session_uid: Session identifier
+            meeting_url: Optional meeting URL
+            
+        Returns:
+            Boolean indicating success or failure
+        """
+        # Check connection
+        if not self.is_connected or not self.redis_client:
+            logging.warning("Cannot publish speaker event: Not connected to Redis")
+            return False
+            
+        # Validate required fields
+        if not all([token, platform, meeting_id, event_type, participant_name, 
+                   participant_id_meet, client_timestamp_ms, session_uid]):
+            logging.error("Missing required fields for speaker event")
+            return False
+            
+        try:
+            # Create payload
+            payload = {
+                "type": "speaker_activity",
+                "token": token,
+                "platform": platform,
+                "meeting_id": meeting_id,
+                "event_type": event_type,
+                "participant_name": participant_name,
+                "participant_id_meet": participant_id_meet,
+                "client_timestamp_ms": client_timestamp_ms,
+                "session_uid": session_uid,
+                "meeting_url": meeting_url,
+                "server_timestamp_iso": datetime.datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Publish to Redis stream (using same stream as transcriptions for now)
+            # In future, could be separated to dedicated speaker_events stream
+            message = {
+                "payload": json.dumps(payload)
+            }
+            
+            result = self.redis_client.xadd(
+                self.stream_key,  # Using transcription_segments stream
+                message
+            )
+            
+            if result:
+                logging.debug(f"Published speaker event: {event_type} for {participant_name}")
+                return True
+            else:
+                logging.error("Failed to publish speaker event")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error publishing speaker event: {e}")
             return False
 
 class ClientManager:
@@ -595,8 +664,25 @@ class TranscriptionServer:
             
             logging.info(f"Speaker Event: {event_type} - {participant_name} ({participant_id}) at {timestamp}")
             
-            # Future Phase 2: Store speaker events for timeline correlation
-            # For now, just log the events
+            # Publish speaker event to Redis stream for processing
+            if hasattr(self, 'collector_client') and self.collector_client:
+                try:
+                    self.collector_client.publish_speaker_event(
+                        token=payload.get("token"),
+                        platform=payload.get("platform"),
+                        meeting_id=payload.get("meeting_id"),
+                        event_type=event_type,
+                        participant_name=participant_name,
+                        participant_id_meet=participant_id,
+                        client_timestamp_ms=timestamp,
+                        session_uid=payload.get("uid"),
+                        meeting_url=payload.get("meeting_url")
+                    )
+                    logging.debug(f"Speaker event published to Redis stream: {event_type} for {participant_name}")
+                except Exception as e:
+                    logging.error(f"Failed to publish speaker event to Redis: {e}")
+            else:
+                logging.warning("No collector client available to publish speaker events")
             
         except Exception as e:
             logging.error(f"Error processing speaker event: {e}")

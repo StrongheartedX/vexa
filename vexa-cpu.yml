@@ -1,0 +1,142 @@
+version: '3.9'
+
+secrets:
+  db_pass:
+    external: true
+    name: db_pass
+  gcp_sa_key:
+    external: true
+    name: gcp_sa_key
+  admin_api_token:
+    external: true
+    name: admin_api_token
+
+networks:
+  vexa-net:
+    external: true
+    driver: overlay
+
+services:
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+    command: >
+      --private-ip
+      --structured-logs
+      --port 5432
+      ${PROJECT}:europe-west1:vexa-db
+    secrets:
+      - gcp_sa_key
+    networks:
+      - vexa-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - vexa-net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  api-gateway:
+    image: ${REG}/api-gateway:latest
+    ports:
+      - "80:8000"
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql://vexa-user@vexa-db/vexa?host=cloud-sql-proxy&port=5432
+      - DB_USER=vexa-user
+      - DB_PASS_SECRET_FILE=/run/secrets/db_pass
+      - ADMIN_API_TOKEN_SECRET_FILE=/run/secrets/admin_api_token
+    secrets:
+      - db_pass
+      - admin_api_token
+    networks:
+      - vexa-net
+    depends_on:
+      - cloud-sql-proxy
+      - redis
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+  
+  admin-api:
+    image: ${REG}/admin-api:latest
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql://vexa-user@vexa-db/vexa?host=cloud-sql-proxy&port=5432
+      - DB_USER=vexa-user
+      - DB_PASS_SECRET_FILE=/run/secrets/db_pass
+      - ADMIN_API_TOKEN_SECRET_FILE=/run/secrets/admin_api_token
+    secrets:
+      - db_pass
+      - admin_api_token
+    networks:
+      - vexa-net
+    depends_on:
+      - cloud-sql-proxy
+      - redis
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  bot-manager:
+    image: ${REG}/bot-manager:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - REDIS_HOST=redis
+      - VEXA_BOT_IMAGE=${REG}/vexa-bot:latest
+      - OVERLAY_NETWORK_NAME=vexa-net
+    networks:
+      - vexa-net
+    depends_on:
+      - redis
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.labels.worker-type == cpu
+
+  collector:
+    image: ${REG}/collector:latest
+    environment:
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql://vexa-user@vexa-db/vexa?host=cloud-sql-proxy&port=5432
+      - DB_USER=vexa-user
+      - DB_PASS_SECRET_FILE=/run/secrets/db_pass
+    secrets:
+      - db_pass
+    networks:
+      - vexa-net
+    depends_on:
+      - redis
+      - cloud-sql-proxy
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  whisperlive-cpu:
+    image: ${REG}/whisperlive:cpu-latest
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_STREAM_URL=redis://redis:6379
+    networks:
+      - vexa-net
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.worker-type == cpu 

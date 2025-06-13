@@ -1,321 +1,331 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
+.PHONY: help all setup-env check-env phase0 phase1 phase2 phase3 \
+        enable-apis create-registry build-images push-images \
+        setup-cloudsql create-service-account test-connectivity test-images \
+        clean-images clean-all status create-overlay-network create-worker-nodes \
+        setup-secrets deploy-stack stack-status setup-iam-permissions \
+        recreate-swarm init-swarm join-workers \
+        create-firewall-rules create-manager-node destroy-swarm-infra
 
-# Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up migrate-or-init
+# Default target
+all: phase0 phase1 phase2
+	@echo "✅ All prerequisite phases (0-2) completed successfully!"
+	@echo "Run 'make phase3' to provision the Swarm cluster and deploy the stack."
+	@echo "Run 'make destroy-swarm-infra' to tear down all created cloud resources."
 
-# Target to set up only the environment without Docker
-# Ensure .env is created based on TARGET *before* other setup steps
-setup-env: env submodules download-model
-	@echo "Environment setup complete."
-	@echo "The 'env' target (now called by setup-env) handles .env creation/preservation:"
-	@echo "  - If .env exists, it is preserved."
-	@echo "  - If .env does not exist, it is created based on the TARGET variable (e.g., 'make setup-env TARGET=gpu')."
-	@echo "  - If .env is created and no TARGET is specified, it defaults to 'cpu'."
-	@echo "To force an overwrite of an existing .env file, use 'make force-env TARGET=cpu/gpu'."
+help:
+	@echo "Vexa Cloud Deployment Makefile"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make all              # Complete phases 0-2 (setup, build, push, Cloud SQL)"
+	@echo "  make phase3           # Provision Swarm, and deploy the application stack"
+	@echo ""
+	@echo "Individual Phases:"
+	@echo "  make phase0           # Environment and tooling setup"
+	@echo "  make phase1           # GCP setup, build and push images"
+	@echo "  make phase2           # Cloud SQL and service account setup"
+	@echo "  make phase3           # Provision Swarm, and deploy the application stack"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  make status           # Show current deployment status"
+	@echo "  make test-images      # Test pulling images from registry"
+	@echo "  make clean-images     # Remove local Docker images"
+	@echo "  make clean-all        # Full cleanup (USE WITH CAUTION)"
+	@echo "  make destroy-swarm-infra # Destroy all VMs and firewall rules."
 
-# Target to perform all initial setup steps
-setup: setup-env build-bot-image
-	@echo "Setup complete."
+# Configuration - can be overridden
+PROJECT ?= spry-pipe-425611-c4
+REGION ?= europe-west1
+ZONE ?= $(REGION)-b
+REG_REPO ?= vexa
+REG ?= $(REGION)-docker.pkg.dev/$(PROJECT)/$(REG_REPO)
+DB_INSTANCE ?= vexa-db
+DB_NAME ?= vexa
+SERVICE_ACCOUNT ?= sql-proxy-sa
+MANAGER_NAME ?= swarm-manager-1
+WORKER_PREFIX ?= cpu-worker
+GCP_SA_KEY_PATH ?= $(HOME)/sql-proxy-key.json
+CPU_MACHINE_TYPE ?= e2-standard-2
 
-# Initialize and update Git submodules
-submodules:
-	@echo "---> Initializing and updating Git submodules..."
-	@git submodule update --init --recursive
-
-# Default bot image tag if not specified in .env
-BOT_IMAGE_NAME ?= vexa-bot:dev
-
-# Check if Docker daemon is running
-check_docker:
-	@echo "---> Checking if Docker is running..."
-	@if ! docker info > /dev/null 2>&1; then \
-		echo "ERROR: Docker is not running. Please start Docker Desktop or Docker daemon first."; \
-		exit 1; \
-	fi
-	@echo "---> Docker is running."
-
-# Include .env file if it exists for environment variables 
--include .env
-
-# Create .env file from example
-env:
-ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make env TARGET=cpu' or 'make env TARGET=gpu')
-	$(eval TARGET := cpu)
+# Load environment variables from .env file if it exists
+ifneq (,$(wildcard ./.env))
+    include .env
+    export
 endif
-	@echo "---> Checking .env file for TARGET=$(TARGET)..."
-	@if [ -f .env ]; then \
-		echo "*** .env file already exists. Keeping existing file. ***"; \
-		echo "*** To force recreation, delete .env first or use 'make force-env TARGET=$(TARGET)'. ***"; \
-	elif [ "$(TARGET)" = "cpu" ]; then \
-		if [ ! -f env-example.cpu ]; then \
-			echo "env-example.cpu not found. Creating default one."; \
-			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
-			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
-			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
-			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
-			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
-			echo "# Exposed Host Ports" >> env-example.cpu; \
-			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.cpu; \
-			echo "ADMIN_API_HOST_PORT=8057" >> env-example.cpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.cpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.cpu; \
-			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.cpu; \
-			echo "POSTGRES_HOST_PORT=5438" >> env-example.cpu; \
-		fi; \
-		cp env-example.cpu .env; \
-		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
-	elif [ "$(TARGET)" = "gpu" ]; then \
-		if [ ! -f env-example.gpu ]; then \
-			echo "env-example.gpu not found. Creating default one."; \
-			echo "ADMIN_API_TOKEN=token" > env-example.gpu; \
-			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.gpu; \
-			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.gpu; \
-			echo "WHISPER_MODEL_SIZE=medium" >> env-example.gpu; \
-			echo "DEVICE_TYPE=cuda" >> env-example.gpu; \
-			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.gpu; \
-			echo "# Exposed Host Ports" >> env-example.gpu; \
-			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.gpu; \
-			echo "ADMIN_API_HOST_PORT=8057" >> env-example.gpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.gpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.gpu; \
-			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.gpu; \
-			echo "POSTGRES_HOST_PORT=5438" >> env-example.gpu; \
-		fi; \
-		cp env-example.gpu .env; \
-		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
-	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make env TARGET=<cpu|gpu>"; \
+
+ADMIN_API_TOKEN ?= "change-me-to-a-secure-token"
+
+# Ensure gcloud is configured
+check-env:
+	@echo "🔍 Checking environment..."
+	@if ! which gcloud >/dev/null 2>&1; then \
+		echo "❌ Error: gcloud CLI not found. Please install Google Cloud SDK."; \
 		exit 1; \
 	fi
-
-# Force create .env file from example (overwrite existing)
-force-env:
-ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make force-env TARGET=cpu' or 'make force-env TARGET=gpu')
-	$(eval TARGET := cpu)
-endif
-	@echo "---> Creating .env file for TARGET=$(TARGET) (forcing overwrite)..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
-		if [ ! -f env-example.cpu ]; then \
-			echo "env-example.cpu not found. Creating default one."; \
-			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
-			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
-			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
-			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
-			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
-			echo "# Exposed Host Ports" >> env-example.cpu; \
-			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.cpu; \
-			echo "ADMIN_API_HOST_PORT=8057" >> env-example.cpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.cpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.cpu; \
-			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.cpu; \
-			echo "POSTGRES_HOST_PORT=5438" >> env-example.cpu; \
-		fi; \
-		cp env-example.cpu .env; \
-		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
-	elif [ "$(TARGET)" = "gpu" ]; then \
-		if [ ! -f env-example.gpu ]; then \
-			echo "env-example.gpu not found. Creating default one."; \
-			echo "ADMIN_API_TOKEN=token" > env-example.gpu; \
-			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.gpu; \
-			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.gpu; \
-			echo "WHISPER_MODEL_SIZE=medium" >> env-example.gpu; \
-			echo "DEVICE_TYPE=cuda" >> env-example.gpu; \
-			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.gpu; \
-			echo "# Exposed Host Ports" >> env-example.gpu; \
-			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.gpu; \
-			echo "ADMIN_API_HOST_PORT=8057" >> env-example.gpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.gpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.gpu; \
-			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.gpu; \
-			echo "POSTGRES_HOST_PORT=5438" >> env-example.gpu; \
-		fi; \
-		cp env-example.gpu .env; \
-		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
-	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make force-env TARGET=<cpu|gpu>"; \
+	@if ! which docker >/dev/null 2>&1; then \
+		echo "❌ Error: docker not found. Please install Docker."; \
 		exit 1; \
 	fi
+	@echo "✅ Environment check passed"
 
-# Download the Whisper model
-download-model:
-	@echo "---> Creating ./hub directory if it doesn't exist..."
-	@mkdir -p ./hub
-	@echo "---> Ensuring ./hub directory is writable..."
-	@chmod u+w ./hub
-	@echo "---> Downloading Whisper model (this may take a while)..."
-	@python download_model.py
+setup-env: check-env
+	@echo "🔧 Setting up environment variables..."
+	@echo "PROJECT=$(PROJECT)"
+	@echo "REGION=$(REGION)"
+	@echo "ZONE=$(ZONE)"
+	@echo "REG=$(REG)"
+	@gcloud config set project $(PROJECT) || (echo "❌ Failed to set project. Make sure you have access to $(PROJECT)" && exit 1)
+	@echo "✅ Environment configured"
 
-# Build the standalone vexa-bot image
-# Uses BOT_IMAGE_NAME from .env if available, otherwise falls back to default
-build-bot-image: check_docker
-	@if [ -f .env ]; then \
-		ENV_BOT_IMAGE_NAME=$$(grep BOT_IMAGE_NAME .env | cut -d= -f2); \
-		if [ -n "$$ENV_BOT_IMAGE_NAME" ]; then \
-			echo "---> Building $$ENV_BOT_IMAGE_NAME image (from .env)..."; \
-			docker build -t $$ENV_BOT_IMAGE_NAME -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
-		else \
-			echo "---> Building $(BOT_IMAGE_NAME) image (BOT_IMAGE_NAME not found in .env)..."; \
-			docker build -t $(BOT_IMAGE_NAME) -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
-		fi; \
-	else \
-		echo "---> Building $(BOT_IMAGE_NAME) image (.env file not found)..."; \
-		docker build -t $(BOT_IMAGE_NAME) -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
-	fi
+# Phase 0: Tooling & Repository Bootstrap
+phase0: setup-env
+	@echo "🚀 Phase 0: Tooling & Repository Bootstrap"
+	@echo "✅ Makefile ready"
+	@echo "✅ Environment variables configured"
+	@echo "✅ Phase 0 completed"
 
-# Build Docker Compose service images
-build: check_docker
-	@echo "---> Building Docker images..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
-		echo "---> Building with 'cpu' profile (includes whisperlive-cpu)..."; \
-		docker compose --profile cpu build; \
-	elif [ "$(TARGET)" = "gpu" ]; then \
-		echo "---> Building with 'gpu' profile (includes whisperlive GPU)..."; \
-		docker compose --profile gpu build; \
-	else \
-		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be built."; \
-		docker compose --profile cpu build; \
-	fi
+# Phase 1: Build & GCP Artifact Registry Setup
+phase1: phase0 enable-apis create-registry build-images push-images test-images
+	@echo "✅ Phase 1: Build & GCP Artifact Registry Setup completed"
 
-# Start services in detached mode
-up: check_docker
-	@echo "---> Starting Docker Compose services..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
-		echo "---> Activating 'cpu' profile to start whisperlive-cpu along with other services..."; \
-		docker compose --profile cpu up -d; \
-	elif [ "$(TARGET)" = "gpu" ]; then \
-		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
-		docker compose --profile gpu up -d; \
-	else \
-		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
-		docker compose --profile cpu up -d; \
-	fi
+enable-apis:
+	@echo "🔧 Enabling required GCP APIs..."
+	@gcloud services enable artifactregistry.googleapis.com compute.googleapis.com sqladmin.googleapis.com
+	@echo "✅ GCP APIs enabled"
 
-# Stop services
-down: check_docker
-	@echo "---> Stopping Docker Compose services..."
-	@docker compose down
+create-registry:
+	@echo "🏗️  Creating Artifact Registry repository..."
+	@gcloud artifacts repositories create $(REG_REPO) \
+		--location=$(REGION) \
+		--repository-format=docker || echo "ℹ️  Repository already exists"
+	@gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet
+	@echo "✅ Artifact Registry configured"
 
-# Show container status
-ps: check_docker
-	@docker compose ps
+build-images:
+	@echo "🔨 Building all Vexa service images..."
+	@docker build -t $(REG)/api-gateway:latest           -f services/api-gateway/Dockerfile .
+	@docker build -t $(REG)/admin-api:latest             -f services/admin-api/Dockerfile .
+	@docker build -t $(REG)/bot-manager:latest           -f services/bot-manager/Dockerfile .
+	@docker build -t $(REG)/vexa-bot:latest              -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core
+	@docker build -t $(REG)/whisperlive:cpu-latest       -f services/WhisperLive/Dockerfile.cpu .
+	@docker build -t $(REG)/collector:latest             -f services/transcription-collector/Dockerfile .
+	@echo "✅ All images built successfully"
 
-# Tail logs for all services
-logs:
-	@docker compose logs -f
+push-images:
+	@echo "📤 Pushing images to GCP Artifact Registry..."
+	@docker push $(REG)/api-gateway:latest
+	@docker push $(REG)/admin-api:latest
+	@docker push $(REG)/bot-manager:latest
+	@docker push $(REG)/vexa-bot:latest
+	@docker push $(REG)/whisperlive:cpu-latest
+	@docker push $(REG)/collector:latest
+	@echo "✅ All images pushed successfully"
 
-# Run the interaction test script
-test: check_docker
-	@echo "---> Running test script..."
-	@echo "---> API Documentation URLs:"
-	@if [ -f .env ]; then \
-		API_PORT=$$(grep -E '^[[:space:]]*API_GATEWAY_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
-		ADMIN_PORT=$$(grep -E '^[[:space:]]*ADMIN_API_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
-		[ -z "$$API_PORT" ] && API_PORT=8056; \
-		[ -z "$$ADMIN_PORT" ] && ADMIN_PORT=8057; \
-		echo "    Main API:  http://localhost:$$API_PORT/docs"; \
-		echo "    Admin API: http://localhost:$$ADMIN_PORT/docs"; \
-	else \
-		echo "    Main API:  http://localhost:8056/docs"; \
-		echo "    Admin API: http://localhost:8057/docs"; \
-	fi
-	@chmod +x run_vexa_interaction.sh
-	@./run_vexa_interaction.sh
+test-images:
+	@echo "🧪 Testing image availability..."
+	@docker pull $(REG)/whisperlive:cpu-latest >/dev/null
+	@echo "✅ Images accessible from registry"
 
-# --- Database Migration Commands ---
+# Phase 2: Cloud SQL Provisioning & Connectivity
+phase2: phase1 setup-cloudsql create-service-account
+	@echo "✅ Phase 2: Cloud SQL Provisioning & Connectivity completed"
 
-# Smart migration: detects if database is fresh, legacy, or already Alembic-managed.
-# This is the primary target for ensuring the database schema is up to date.
-migrate-or-init: check_docker
-	@echo "---> Starting smart database migration/initialization..."; \
-	set -e; \
-	if ! docker-compose ps -q postgres | grep -q .; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi; \
-	echo "---> Waiting for database to be ready..."; \
-	count=0; \
-	while ! docker-compose exec -T postgres pg_isready -U postgres -d vexa -q; do \
-		if [ $$count -ge 12 ]; then \
-			echo "ERROR: Database did not become ready in 60 seconds."; \
-			exit 1; \
-		fi; \
-		echo "Database not ready, waiting 5 seconds..."; \
+setup-cloudsql:
+	@echo "🗄️  Setting up Cloud SQL..."
+	@gcloud sql instances create $(DB_INSTANCE) \
+		--database-version=POSTGRES_15 \
+		--cpu=1 \
+		--memory=4GiB \
+		--region=$(REGION) \
+		--root-password="VexaDB123!" 2>/dev/null || echo "ℹ️  Cloud SQL instance already exists"
+	@gcloud sql databases create $(DB_NAME) --instance=$(DB_INSTANCE) 2>/dev/null || echo "ℹ️  Database already exists"
+	@echo "✅ Cloud SQL configured"
+
+create-service-account:
+	@echo "🔑 Creating service account for Cloud SQL access..."
+	@gcloud iam service-accounts create $(SERVICE_ACCOUNT) \
+		--display-name="Cloud SQL Proxy Service Account" 2>/dev/null || echo "ℹ️  Service account already exists"
+	@gcloud projects add-iam-policy-binding $(PROJECT) \
+		--member="serviceAccount:$(SERVICE_ACCOUNT)@$(PROJECT).iam.gserviceaccount.com" \
+		--role="roles/cloudsql.client" >/dev/null
+	@gcloud iam service-accounts keys create $(GCP_SA_KEY_PATH) \
+		--iam-account=$(SERVICE_ACCOUNT)@$(PROJECT).iam.gserviceaccount.com 2>/dev/null || echo "ℹ️  Service account key already exists"
+	@echo "✅ Service account configured"
+
+# Phase 3: Docker Swarm Deployment
+phase3: setup-iam-permissions init-swarm create-worker-nodes join-workers deploy-stack
+	@echo "✅ Phase 3: Docker Swarm Deployment completed."
+	@echo "Your Vexa application is running on a new Swarm Cluster."
+	@make status
+
+deploy-stack: setup-secrets
+	@echo "🚀 Deploying the Vexa stack to the Swarm..."
+	@echo "Substituting environment variables in docker-compose file..."
+	@export REG=$(REG) PROJECT=$(PROJECT) && envsubst < vexa-cpu.yml > vexa-cpu-substituted.yml
+	@gcloud compute scp --zone=$(ZONE) vexa-cpu-substituted.yml $(MANAGER_NAME):~/vexa-cpu.yml
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker stack deploy -c vexa-cpu.yml --with-registry-auth vexa-cpu"
+	@rm vexa-cpu-substituted.yml
+	@echo "✅ Stack deployment initiated."
+
+destroy-stack:
+	@echo "🔥 Removing the Vexa stack..."
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker stack rm vexa-cpu" >/dev/null 2>&1 || echo "ℹ️  Stack 'vexa-cpu' not found."
+	@echo "🗑️  Removing secrets..."
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker secret rm gcp_sa_key db_pass admin_api_token" >/dev/null 2>&1 || echo "ℹ️  Secrets not found."
+	@echo "🌐 Removing overlay network..."
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker network rm vexa-net" >/dev/null 2>&1 || echo "ℹ️  Network 'vexa-net' not found."
+
+# Swarm Cluster Management
+recreate-swarm: destroy-swarm-infra init-swarm create-worker-nodes join-workers
+	@echo "✅ Swarm cluster has been recreated with the latest configuration."
+
+init-swarm: create-manager-node create-firewall-rules
+	@echo "🚀 Initializing Docker Swarm on the manager..."
+	@echo "Waiting for manager VM startup script to finish... (Streaming logs)"
+	@for j in 1 2 3; do \
+		gcloud compute instances tail-serial-port-output $(MANAGER_NAME) --zone=$(ZONE) --port 1 | \
+			while read line; do \
+				echo "$$line"; \
+				if echo "$$line" | grep -q "Finished running startup script"; then break; fi; \
+			done && break || echo "Retry $$j: Waiting for startup script to finish..."; \
 		sleep 5; \
-		count=$$((count+1)); \
-	done; \
-	echo "---> Database is ready. Checking its state..."; \
-	if docker-compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
-		echo "STATE: Alembic-managed database detected."; \
-		echo "ACTION: Running standard migrations to catch up to 'head'..."; \
-		$(MAKE) migrate; \
-	elif docker-compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
-		echo "STATE: Legacy (non-Alembic) database detected."; \
-		echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
-		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
-		$(MAKE) migrate; \
+	done
+	@echo "✅ Manager startup script finished. Verifying Docker installation..."
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start...'; sleep 3; done"
+	@echo "✅ Docker is running on the manager."
+	@if ! gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker node ls" >/dev/null 2>&1; then \
+		echo "--- Swarm not initialized. Clearing any lingering state and initializing now..."; \
+		gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker swarm leave --force" >/dev/null 2>&1; \
+		MANAGER_IP=$$(gcloud compute instances describe $(MANAGER_NAME) --zone=$(ZONE) --format='get(networkInterfaces[0].networkIP)'); \
+		gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker swarm init --advertise-addr $$MANAGER_IP"; \
 	else \
-		echo "STATE: Fresh, empty database detected."; \
-		echo "ACTION: Creating schema directly from models and stamping at revision dc59a1c03d1f..."; \
-		docker-compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp dc59a1c03d1f; \
-	fi; \
-	echo "---> Smart database migration/initialization complete!"
-
-# Apply all pending migrations to bring database to latest version
-migrate: check_docker
-	@echo "---> Applying database migrations..."
-	@if ! docker-compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+		echo "--- Swarm is already active on the manager."; \
 	fi
-	@echo "---> Running alembic upgrade head..."
-	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head
 
-# Create a new migration file based on model changes
-makemigrations: check_docker
-	@if [ -z "$(M)" ]; then \
-		echo "Usage: make makemigrations M=\"your migration message\""; \
-		echo "Example: make makemigrations M=\"Add user profile table\""; \
-		exit 1; \
-	fi
-	@echo "---> Creating new migration: $(M)"
-	@if ! docker-compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi
-	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
+create-firewall-rules:
+	@echo "🔥 Creating firewall rules for Swarm..."
+	@gcloud compute firewall-rules create swarm-internal --allow tcp:2377,tcp:7946,udp:7946,udp:4789 --source-tags=swarm-node --target-tags=swarm-node >/dev/null 2>&1 || echo "ℹ️  Firewall rule 'swarm-internal' already exists."
+	@gcloud compute firewall-rules create swarm-ssh --allow tcp:22 --source-ranges=0.0.0.0/0 --target-tags=swarm-node >/dev/null 2>&1 || echo "ℹ️  Firewall rule 'swarm-ssh' already exists."
+	@echo "✅ Firewall rules are in place."
 
-# Initialize the database (first time setup) - creates tables and stamps with latest revision
-init-db: check_docker
-	@echo "---> Initializing database and stamping with Alembic..."
-	docker-compose run --rm transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
-	docker-compose run --rm transcription-collector alembic -c /app/alembic.ini stamp head
-	@echo "---> Database initialized and stamped."
+create-manager-node:
+	@echo "👑 Provisioning Swarm manager node..."
+	@gcloud compute instances create $(MANAGER_NAME) \
+		--zone=$(ZONE) \
+		--machine-type=$(CPU_MACHINE_TYPE) \
+		--tags=swarm-node,swarm-manager \
+		--metadata-from-file=startup-script=gce-startup-script.sh >/dev/null 2>&1 || echo "ℹ️  VM '$(MANAGER_NAME)' already exists."
+	@echo "✅ Swarm manager node provisioned."
 
-# Stamp existing database with current version (for existing installations)
-stamp-db: check_docker
-	@echo "---> Stamping existing database with current migration version..."
-	@if ! docker-compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi
-	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head
-	@echo "---> Database stamped successfully!"
+create-worker-nodes: create-manager-node
+	@echo "🌎 Creating Swarm worker nodes..."
+	@for i in 1 2; do \
+		if ! gcloud compute instances describe $(WORKER_PREFIX)-$$i --zone=$(ZONE) >/dev/null 2>&1; then \
+			echo "--- Creating worker $(WORKER_PREFIX)-$$i..."; \
+			gcloud compute instances create $(WORKER_PREFIX)-$$i \
+				--zone=$(ZONE) \
+				--machine-type=$(CPU_MACHINE_TYPE) \
+				--image-project=debian-cloud \
+				--image-family=debian-12 \
+				--boot-disk-size=20GB \
+				--scopes=cloud-platform \
+				--metadata-from-file=startup-script=gce-startup-script.sh; \
+		else \
+			echo "--- Worker $(WORKER_PREFIX)-$$i already exists."; \
+		fi; \
+		echo "--- Waiting for worker $(WORKER_PREFIX)-$$i to finish startup script..."; \
+		for j in 1 2 3; do \
+			gcloud compute instances tail-serial-port-output $(WORKER_PREFIX)-$$i --zone=$(ZONE) --port 1 | \
+				while read line; do \
+					echo "$$line"; \
+					if echo "$$line" | grep -q "Finished running startup script"; then break; fi; \
+				done && break || echo "Retry $$j: Waiting for startup script to finish..."; \
+			sleep 5; \
+		done; \
+		echo "✅ Worker $(WORKER_PREFIX)-$$i startup script finished. Verifying Docker installation..."; \
+		gcloud compute ssh $(WORKER_PREFIX)-$$i --zone=$(ZONE) --command="while ! sudo docker info > /dev/null 2>&1; do echo 'Waiting for Docker to start on $(WORKER_PREFIX)-$$i...'; sleep 3; done"; \
+		echo "✅ Docker is running on worker $(WORKER_PREFIX)-$$i."; \
+	done
+	@echo "✅ All worker nodes are running and Docker is ready."
 
-# Show current migration status
-migration-status: check_docker
-	@echo "---> Checking migration status..."
-	@if ! docker-compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi
-	@echo "---> Current database version:"
-	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini current
-	@echo "---> Migration history:"
-	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
+join-workers: init-swarm create-worker-nodes
+	@echo "🤝 Joining worker nodes to the Swarm..."
+	@JOIN_TOKEN=$$(gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker swarm join-token worker -q"); \
+	MANAGER_IP=$$(gcloud compute instances describe $(MANAGER_NAME) --zone=$(ZONE) --format='get(networkInterfaces[0].networkIP)'); \
+	for i in 1 2; do \
+		echo "--- Joining worker $(WORKER_PREFIX)-$$i..."; \
+		gcloud compute ssh $(WORKER_PREFIX)-$$i --zone=$(ZONE) --command="sudo docker swarm join --token $$JOIN_TOKEN $$MANAGER_IP:2377" || echo "Node is already part of the swarm."; \
+	done
+	@echo "✅ Worker nodes joined."
 
-# --- End Database Migration Commands ---
+status:
+	@echo "📊 Checking deployment status..."
+	@echo "--- GCP Project Info ---"
+	@gcloud config list
+	@echo "--- Swarm Status (from manager) ---"
+	@-gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker node ls"
+	@echo "--- Stack Services (from manager) ---"
+	@-gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker stack services vexa-cpu"
+
+setup-iam-permissions:
+	@echo "🔐 Granting IAM permissions to Compute Engine default service account..."
+	@GCE_SA_EMAIL=$$(gcloud iam service-accounts list --filter="displayName:'Compute Engine default service account'" --format='value(email)'); \
+	gcloud projects add-iam-policy-binding $(PROJECT) \
+		--member="serviceAccount:$$GCE_SA_EMAIL" \
+		--role="roles/artifactregistry.reader" >/dev/null 2>&1 || echo "ℹ️  Artifact Registry Reader role already exists for GCE SA."; \
+	gcloud projects add-iam-policy-binding $(PROJECT) \
+		--member="serviceAccount:$$GCE_SA_EMAIL" \
+		--role="roles/cloudsql.client" >/dev/null 2>&1 || echo "ℹ️  Cloud SQL Client role already exists for GCE SA."; \
+	gcloud projects add-iam-policy-binding $(PROJECT) \
+		--member="serviceAccount:$$GCE_SA_EMAIL" \
+		--role="roles/logging.logWriter" >/dev/null 2>&1 || echo "ℹ️  Logs Writer role already exists for GCE SA."
+	@echo "✅ IAM permissions granted."
+
+# Clean up
+clean-images:
+	@echo "🗑️  Removing local Docker images..."
+	@docker rmi -f $(shell docker images -q "$(REG)/*") >/dev/null 2>&1 || echo "No images to remove."
+
+destroy-swarm-infra:
+	@echo "🔥 Destroying Swarm VMs and firewall rules. THIS IS DESTRUCTIVE."
+	@echo -n "Are you sure you want to delete all Swarm VMs and firewall rules in project $(PROJECT)? [y/N] "; \
+	old_stty_cfg=$$(stty -g); \
+	stty raw -echo; \
+	REPLY=$$(head -c 1); \
+	stty $$old_stty_cfg; \
+	echo; \
+	case $$REPLY in \
+		[Yy]) \
+			echo "Proceeding with deletion..."; \
+			gcloud compute instances delete $(MANAGER_NAME) $(WORKER_PREFIX)-1 $(WORKER_PREFIX)-2 --zone=$(ZONE) --quiet || echo "VMs not found."; \
+			gcloud compute firewall-rules delete swarm-internal swarm-ssh --quiet || echo "Firewall rules not found."; \
+			echo "✅ Infrastructure destroyed.";; \
+		*) \
+			echo "Aborted.";; \
+	esac
+
+clean-all: destroy-stack destroy-swarm-infra
+	@echo "✅ Full cleanup complete."
+
+setup-secrets: init-swarm
+	@echo "🤫 Setting up secrets..."
+	@echo "🔑 Setting up Docker Swarm secrets..."
+	@if [ ! -f "$(GCP_SA_KEY_PATH)" ]; then echo "❌ SA Key not found at $(GCP_SA_KEY_PATH)!"; exit 1; fi
+	@cat $(GCP_SA_KEY_PATH) | gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker secret create gcp_sa_key -" >/dev/null 2>&1 || echo "ℹ️  Secret 'gcp_sa_key' already exists."
+	@echo "VexaDB123!" | gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker secret create db_pass -" >/dev/null 2>&1 || echo "ℹ️  Secret 'db_pass' already exists."
+	@printf "%s" "$(ADMIN_API_TOKEN)" | gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker secret create admin_api_token -" >/dev/null 2>&1 || echo "ℹ️  Secret 'admin_api_token' already exists."
+	@echo "✅ Secrets configured."
+
+stack-status:
+	@echo "📋 Checking Vexa stack status..."
+	@gcloud compute ssh $(MANAGER_NAME) --zone=$(ZONE) --command="sudo docker stack ps vexa"
+
+clean-swarm:
+	@echo "🔥 Tearing down the Swarm cluster..."
+	@gcloud compute instances delete $(MANAGER_NAME) $(WORKER_PREFIX)-1 $(WORKER_PREFIX)-2 --zone=$(ZONE) --quiet || echo "ℹ️  Swarm VMs already deleted."
+	@echo "✅ Swarm cluster deleted."
+
+test-connectivity:
+	@echo "🔗 Testing Cloud SQL connectivity..."
+	@echo "This requires setting up the Cloud SQL Proxy locally"
+	@echo "Command to run manually:"
+	@echo "docker run --rm --name cloudsql-proxy -v ~/sql-proxy-key.json:/config/key.json -p 5432:5432 gcr.io/cloudsql-docker/gce-proxy:latest /cloud_sql_proxy -instances=$(PROJECT):$(REGION):$(DB_INSTANCE)=tcp:0.0.0.0:5432 -credential_file=/config/key.json" 
